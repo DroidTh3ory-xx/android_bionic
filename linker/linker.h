@@ -34,42 +34,62 @@
 #include <elf.h>
 #include <sys/exec_elf.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <link.h>
 
-// Returns the address of the page containing address 'x'.
-#define PAGE_START(x)  ((x) & PAGE_MASK)
+#undef PAGE_MASK
+#undef PAGE_SIZE
+#define PAGE_SIZE 4096
+#define PAGE_MASK (PAGE_SIZE-1)
 
-// Returns the offset of address 'x' in its page.
-#define PAGE_OFFSET(x) ((x) & ~PAGE_MASK)
+/* Convenience macros to make page address/offset computations more explicit */
 
-// Returns the address of the next page after address 'x', unless 'x' is
-// itself at the start of a page.
+/* Returns the address of the page starting at address 'x' */
+#define PAGE_START(x)  ((x) & ~PAGE_MASK)
+
+/* Returns the offset of address 'x' in its memory page, i.e. this is the
+ * same than 'x' - PAGE_START(x) */
+#define PAGE_OFFSET(x) ((x) & PAGE_MASK)
+
+/* Returns the address of the next page after address 'x', unless 'x' is
+ * itself at the start of a page. Equivalent to:
+ *
+ *  (x == PAGE_START(x)) ? x : PAGE_START(x)+PAGE_SIZE
+ */
 #define PAGE_END(x)    PAGE_START((x) + (PAGE_SIZE-1))
 
-// Magic shared structures that GDB knows about.
+void debugger_init();
 
-struct link_map {
-  uintptr_t l_addr;
-  char * l_name;
-  uintptr_t l_ld;
-  struct link_map * l_next;
-  struct link_map * l_prev;
+/* magic shared structures that GDB knows about */
+
+struct link_map
+{
+    uintptr_t l_addr;
+    char * l_name;
+    uintptr_t l_ld;
+    struct link_map * l_next;
+    struct link_map * l_prev;
 };
 
 // Values for r_debug->state
 enum {
-  RT_CONSISTENT,
-  RT_ADD,
-  RT_DELETE
+    RT_CONSISTENT,
+    RT_ADD,
+    RT_DELETE
 };
 
-struct r_debug {
-  int32_t r_version;
-  struct link_map* r_map;
-  void (*r_brk)(void);
-  int32_t r_state;
-  uintptr_t r_ldbase;
+struct r_debug
+{
+    int32_t r_version;
+    struct link_map * r_map;
+    void (*r_brk)(void);
+    int32_t r_state;
+    uintptr_t r_ldbase;
 };
+
+typedef struct soinfo soinfo;
 
 #define FLAG_LINKED     0x00000001
 #define FLAG_ERROR      0x00000002
@@ -78,87 +98,82 @@ struct r_debug {
 
 #define SOINFO_NAME_LEN 128
 
-struct soinfo {
-  char name[SOINFO_NAME_LEN];
-  const Elf32_Phdr* phdr;
-  int phnum;
-  unsigned entry;
-  unsigned base;
-  unsigned size;
+struct soinfo
+{
+    char name[SOINFO_NAME_LEN];
+    const Elf32_Phdr *phdr;
+    int phnum;
+    unsigned entry;
+    unsigned base;
+    unsigned size;
 
-  int unused;  // DO NOT USE, maintained for compatibility.
+    int unused;  // DO NOT USE, maintained for compatibility.
 
-  unsigned* dynamic;
+    unsigned *dynamic;
 
-  unsigned unused2; // DO NOT USE, maintained for compatibility
-  unsigned unused3; // DO NOT USE, maintained for compatibility
+    unsigned unused2; // DO NOT USE, maintained for compatibility
+    unsigned unused3; // DO NOT USE, maintained for compatibility
 
-  soinfo* next;
-  unsigned flags;
+    soinfo *next;
+    unsigned flags;
 
-  const char* strtab;
-  Elf32_Sym* symtab;
+    const char *strtab;
+    Elf32_Sym *symtab;
 
-  unsigned nbucket;
-  unsigned nchain;
-  unsigned* bucket;
-  unsigned* chain;
+    unsigned nbucket;
+    unsigned nchain;
+    unsigned *bucket;
+    unsigned *chain;
 
-  unsigned* plt_got;
+    unsigned *plt_got;
 
-  Elf32_Rel* plt_rel;
-  unsigned plt_rel_count;
+    Elf32_Rel *plt_rel;
+    unsigned plt_rel_count;
 
-  Elf32_Rel* rel;
-  unsigned rel_count;
+    Elf32_Rel *rel;
+    unsigned rel_count;
 
-  unsigned* preinit_array;
-  unsigned preinit_array_count;
+    unsigned *preinit_array;
+    unsigned preinit_array_count;
 
-  unsigned* init_array;
-  unsigned init_array_count;
-  unsigned* fini_array;
-  unsigned fini_array_count;
+    unsigned *init_array;
+    unsigned init_array_count;
+    unsigned *fini_array;
+    unsigned fini_array_count;
 
-  void (*init_func)();
-  void (*fini_func)();
+    void (*init_func)(void);
+    void (*fini_func)(void);
 
 #if defined(ANDROID_ARM_LINKER)
-  // ARM EABI section used for stack unwinding.
-  unsigned* ARM_exidx;
-  unsigned ARM_exidx_count;
+    /* ARM EABI section used for stack unwinding. */
+    unsigned *ARM_exidx;
+    unsigned ARM_exidx_count;
 #elif defined(ANDROID_MIPS_LINKER)
 #if 0
-  // Not yet.
-  unsigned* mips_pltgot
+     /* not yet */
+     unsigned *mips_pltgot
 #endif
-  unsigned mips_symtabno;
-  unsigned mips_local_gotno;
-  unsigned mips_gotsym;
-#endif
+     unsigned mips_symtabno;
+     unsigned mips_local_gotno;
+     unsigned mips_gotsym;
+#endif /* ANDROID_*_LINKER */
 
-  unsigned refcount;
-  struct link_map linkmap;
+    unsigned refcount;
+    struct link_map linkmap;
 
-  bool constructors_called;
+    int constructors_called;
 
-  // When you read a virtual address from the ELF file, add this
-  // value to get the corresponding address in the process' address space.
-  Elf32_Addr load_bias;
-
-  bool has_text_relocations;
-  bool has_DT_SYMBOLIC;
-
-  void CallConstructors();
-  void CallDestructors();
-  void CallPreInitConstructors();
-
- private:
-  void CallArray(const char* array_name, unsigned* array, int count, bool reverse);
-  void CallFunction(const char* function_name, void (*function)());
+    /* When you read a virtual address from the ELF file, add this
+     * value to get the corresponding address in the process' address space */
+    Elf32_Addr load_bias;
+    int has_text_relocations;
 };
 
+
 extern soinfo libdl_info;
+
+
+#include <asm/elf.h>
 
 #if defined(ANDROID_ARM_LINKER)
 
@@ -207,17 +222,18 @@ extern soinfo libdl_info;
 #define DT_PREINIT_ARRAYSZ 33
 #endif
 
-soinfo* do_dlopen(const char* name);
-int do_dlclose(soinfo* si);
+soinfo *find_library(const char *name);
+Elf32_Sym *lookup(const char *name, soinfo **found, soinfo *start);
+soinfo *find_containing_library(const void *addr);
+const char *linker_get_error(void);
 
-Elf32_Sym* lookup(const char* name, soinfo** found, soinfo* start);
-soinfo* find_containing_library(const void* addr);
-const char* linker_get_error();
+int soinfo_unload(soinfo* si);
+Elf32_Sym *soinfo_find_symbol(soinfo* si, const void *addr);
+Elf32_Sym *soinfo_lookup(soinfo *si, const char *name);
+void soinfo_call_constructors(soinfo *si);
 
-Elf32_Sym* soinfo_find_symbol(soinfo* si, const void* addr);
-Elf32_Sym* soinfo_lookup(soinfo* si, const char* name);
-
-void debugger_init();
-extern "C" void notify_gdb_of_libraries();
+#ifdef __cplusplus
+};
+#endif
 
 #endif

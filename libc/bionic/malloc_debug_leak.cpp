@@ -26,7 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <arpa/inet.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -37,18 +36,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <unwind.h>
+
+#include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/system_properties.h>
 #include <sys/types.h>
 #include <sys/un.h>
-#include <unistd.h>
-#include <unwind.h>
 
 #include "dlmalloc.h"
 #include "logd.h"
 #include "malloc_debug_common.h"
-#include "ScopedPthreadMutexLocker.h"
 
 // This file should be included into the build only when
 // MALLOC_LEAK_CHECK, or MALLOC_QEMU_INSTRUMENT, or both
@@ -366,7 +366,7 @@ extern "C" void* leak_memalign(size_t alignment, size_t bytes) {
         alignment = 1L << (31 - __builtin_clz(alignment));
     }
 
-    // here, alignment is at least MALLOC_ALIGNMENT<<1 bytes
+    // here, aligment is at least MALLOC_ALIGNMENT<<1 bytes
     // we will align by at least MALLOC_ALIGNMENT bytes
     // and at most alignment-MALLOC_ALIGNMENT bytes
     size_t size = (alignment-MALLOC_ALIGNMENT) + bytes;

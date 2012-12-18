@@ -3,20 +3,25 @@ include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= \
 	arch/$(TARGET_ARCH)/begin.S \
-	debugger.cpp \
-	dlfcn.cpp \
+	debugger.c \
+	dlfcn.c \
 	linker.cpp \
-	linker_environ.cpp \
-	linker_format.cpp \
-	linker_phdr.cpp \
-	rt.cpp
+	linker_environ.c \
+	linker_format.c \
+	linker_phdr.c \
+	rt.c
 
 LOCAL_LDFLAGS := -shared
 
 LOCAL_CFLAGS += -fno-stack-protector \
         -Wstrict-overflow=5 \
         -fvisibility=hidden \
+        -std=gnu99 \
         -Wall -Wextra
+
+# Set LINKER_DEBUG to either 1 or 0
+#
+LOCAL_CFLAGS += -DLINKER_DEBUG=0
 
 # We need to access Bionic private headers in the linker...
 LOCAL_CFLAGS += -I$(LOCAL_PATH)/../libc/
@@ -37,6 +42,9 @@ endif
 
 ifeq ($(TARGET_ARCH),mips)
     LOCAL_CFLAGS += -DANDROID_MIPS_LINKER
+endif
+ifeq ($(TARGET_HAVE_TEGRA_ERRATA_657451),true)
+    LOCAL_CFLAGS += -DHAVE_TEGRA_ERRATA_657451
 endif
 
 LOCAL_MODULE:= linker

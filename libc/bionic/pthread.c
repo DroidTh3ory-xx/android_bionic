@@ -48,7 +48,6 @@
 #include "bionic_atomic_inline.h"
 #include "bionic_futex.h"
 #include "bionic_pthread.h"
-#include "bionic_ssp.h"
 #include "bionic_tls.h"
 #include "pthread_internal.h"
 #include "thread_private.h"
@@ -105,41 +104,44 @@ static pthread_internal_t* gThreadList = NULL;
 static pthread_mutex_t gThreadListLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t gDebuggerNotificationLock = PTHREAD_MUTEX_INITIALIZER;
 
-static void _pthread_internal_remove_locked(pthread_internal_t* thread) {
-  if (thread->next != NULL) {
+
+static void
+_pthread_internal_free(pthread_internal_t* thread)
+{
+    if (thread != NULL) {
+        free(thread);
+    }
+}
+
+
+static void
+_pthread_internal_remove_locked( pthread_internal_t*  thread )
+{
     thread->next->prev = thread->prev;
-  }
-  if (thread->prev != NULL) {
-    thread->prev->next = thread->next;
-  } else {
-    gThreadList = thread->next;
-  }
-
-  // The main thread is not heap-allocated. See __libc_init_tls for the declaration,
-  // and __libc_init_common for the point where it's added to the thread list.
-  if (thread->allocated_on_heap) {
-    free(thread);
-  }
+    thread->prev[0]    = thread->next;
 }
 
-static void _pthread_internal_remove(pthread_internal_t* thread) {
-  pthread_mutex_lock(&gThreadListLock);
-  _pthread_internal_remove_locked(thread);
-  pthread_mutex_unlock(&gThreadListLock);
+static void
+_pthread_internal_remove( pthread_internal_t*  thread )
+{
+    pthread_mutex_lock(&gThreadListLock);
+    _pthread_internal_remove_locked(thread);
+    pthread_mutex_unlock(&gThreadListLock);
 }
 
-__LIBC_ABI_PRIVATE__ void _pthread_internal_add(pthread_internal_t* thread) {
-  pthread_mutex_lock(&gThreadListLock);
+__LIBC_ABI_PRIVATE__ void
+_pthread_internal_add(pthread_internal_t* thread)
+{
+    pthread_mutex_lock(&gThreadListLock);
 
-  // We insert at the head.
-  thread->next = gThreadList;
-  thread->prev = NULL;
-  if (thread->next != NULL) {
-    thread->next->prev = thread;
-  }
-  gThreadList = thread;
+    thread->prev = &gThreadList;
+    thread->next = *(thread->prev);
+    if (thread->next != NULL) {
+        thread->next->prev = &thread->next;
+    }
+    *(thread->prev) = thread;
 
-  pthread_mutex_unlock(&gThreadListLock);
+    pthread_mutex_unlock(&gThreadListLock);
 }
 
 __LIBC_ABI_PRIVATE__ pthread_internal_t*
@@ -161,22 +163,20 @@ __get_stack_base(int  *p_stack_size)
 }
 
 
-void  __init_tls(void** tls, void* thread) {
-  ((pthread_internal_t*) thread)->tls = tls;
+void  __init_tls(void**  tls, void*  thread)
+{
+    int  nn;
 
-  // Zero-initialize all the slots.
-  for (size_t i = 0; i < BIONIC_TLS_SLOTS; ++i) {
-    tls[i] = NULL;
-  }
+    ((pthread_internal_t*)thread)->tls = tls;
 
-  // Slot 0 must point to itself. The x86 Linux kernel reads the TLS from %fs:0.
-  tls[TLS_SLOT_SELF]      = (void*) tls;
-  tls[TLS_SLOT_THREAD_ID] = thread;
+    // slot 0 must point to the tls area, this is required by the implementation
+    // of the x86 Linux kernel thread-local-storage
+    tls[TLS_SLOT_SELF]      = (void*)tls;
+    tls[TLS_SLOT_THREAD_ID] = thread;
+    for (nn = TLS_SLOT_ERRNO; nn < BIONIC_TLS_SLOTS; nn++)
+       tls[nn] = 0;
 
-  // Stack guard generation may make system calls, and those system calls may fail.
-  // If they do, they'll try to set errno, so we can only do this after calling __set_tls.
-  __set_tls((void*) tls);
-  tls[TLS_SLOT_STACK_GUARD] = __generate_stack_chk_guard();
+    __set_tls( (void*)tls );
 }
 
 
@@ -208,14 +208,18 @@ void __thread_entry(int (*func)(void*), void *arg, void **tls)
 #include <private/logd.h>
 
 __LIBC_ABI_PRIVATE__
-int _init_thread(pthread_internal_t* thread, pid_t kernel_id, const pthread_attr_t* attr,
+int _init_thread(pthread_internal_t* thread, pid_t kernel_id, pthread_attr_t* attr,
                  void* stack_base, bool add_to_thread_list)
 {
     int error = 0;
 
-    thread->attr = *attr;
+    if (attr == NULL) {
+        thread->attr = gDefaultPthreadAttr;
+    } else {
+        thread->attr = *attr;
+    }
     thread->attr.stack_base = stack_base;
-    thread->kernel_id = kernel_id;
+    thread->kernel_id       = kernel_id;
 
     // Make a note of whether the user supplied this stack (so we know whether or not to free it).
     if (attr->stack_base == stack_base) {
@@ -227,8 +231,7 @@ int _init_thread(pthread_internal_t* thread, pid_t kernel_id, const pthread_attr
         struct sched_param param;
         param.sched_priority = thread->attr.sched_priority;
         if (sched_setscheduler(kernel_id, thread->attr.sched_policy, &param) == -1) {
-            // For backwards compatibility reasons, we just warn about failures here.
-            // error = errno;
+            // For back compat reasons, we just warn about possible invalid sched_policy
             const char* msg = "pthread_create sched_setscheduler call failed: %s\n";
             __libc_android_log_print(ANDROID_LOG_WARN, "libc", msg, strerror(errno));
         }
@@ -309,7 +312,6 @@ int pthread_create(pthread_t *thread_out, pthread_attr_t const * attr,
     if (thread == NULL) {
         return ENOMEM;
     }
-    thread->allocated_on_heap = true;
 
     if (attr == NULL) {
         attr = &gDefaultPthreadAttr;
@@ -321,7 +323,7 @@ int pthread_create(pthread_t *thread_out, pthread_attr_t const * attr,
     if (stack == NULL) {
         stack = mkstack(stack_size, attr->guard_size);
         if (stack == NULL) {
-            free(thread);
+            _pthread_internal_free(thread);
             return ENOMEM;
         }
     }
@@ -351,12 +353,12 @@ int pthread_create(pthread_t *thread_out, pthread_attr_t const * attr,
         if (stack != attr->stack_base) {
             munmap(stack, stack_size);
         }
-        free(thread);
+        _pthread_internal_free(thread);
         errno = old_errno;
         return clone_errno;
     }
 
-    int init_errno = _init_thread(thread, tid, attr, stack, true);
+    int init_errno = _init_thread(thread, tid, (pthread_attr_t*) attr, stack, true);
     if (init_errno != 0) {
         // Mark the thread detached and let its __thread_entry run to
         // completion. (It'll just exit immediately, cleaning up its resources.)
@@ -580,9 +582,10 @@ void pthread_exit(void * retval)
     pthread_key_clean_all();
 
     // if the thread is detached, destroy the pthread_internal_t
-    // otherwise, keep it in memory and signal any joiners.
+    // otherwise, keep it in memory and signal any joiners
     if (thread->attr.flags & PTHREAD_ATTR_FLAG_DETACHED) {
         _pthread_internal_remove(thread);
+        _pthread_internal_free(thread);
     } else {
         pthread_mutex_lock(&gThreadListLock);
 
@@ -630,18 +633,14 @@ void pthread_exit(void * retval)
 int pthread_join(pthread_t thid, void ** ret_val)
 {
     pthread_internal_t*  thread = (pthread_internal_t*)thid;
-    if (thid == pthread_self()) {
-        return EDEADLK;
-    }
+    int                  count;
 
     // check that the thread still exists and is not detached
     pthread_mutex_lock(&gThreadListLock);
 
-    for (thread = gThreadList; thread != NULL; thread = thread->next) {
-        if (thread == (pthread_internal_t*)thid) {
+    for (thread = gThreadList; thread != NULL; thread = thread->next)
+        if (thread == (pthread_internal_t*)thid)
             goto FoundIt;
-        }
-    }
 
     pthread_mutex_unlock(&gThreadListLock);
     return ESRCH;
@@ -659,21 +658,21 @@ FoundIt:
     *
     * otherwise, we need to increment 'join-count' and wait to be signaled
     */
-    int count = thread->join_count;
+   count = thread->join_count;
     if (count >= 0) {
         thread->join_count += 1;
         pthread_cond_wait( &thread->join_cond, &gThreadListLock );
         count = --thread->join_count;
     }
-    if (ret_val) {
+    if (ret_val)
         *ret_val = thread->return_value;
-    }
 
     /* remove thread descriptor when we're the last joiner or when the
      * thread was already a zombie.
      */
     if (count <= 0) {
         _pthread_internal_remove_locked(thread);
+        _pthread_internal_free(thread);
     }
     pthread_mutex_unlock(&gThreadListLock);
     return 0;
@@ -683,30 +682,28 @@ int  pthread_detach( pthread_t  thid )
 {
     pthread_internal_t*  thread;
     int                  result = 0;
+    int                  flags;
 
     pthread_mutex_lock(&gThreadListLock);
-    for (thread = gThreadList; thread != NULL; thread = thread->next) {
-        if (thread == (pthread_internal_t*)thid) {
+    for (thread = gThreadList; thread != NULL; thread = thread->next)
+        if (thread == (pthread_internal_t*)thid)
             goto FoundIt;
-        }
-    }
 
     result = ESRCH;
     goto Exit;
 
 FoundIt:
-    if (thread->attr.flags & PTHREAD_ATTR_FLAG_DETACHED) {
-        result = EINVAL; // Already detached.
-        goto Exit;
+    do {
+        flags = thread->attr.flags;
+
+        if ( flags & PTHREAD_ATTR_FLAG_DETACHED ) {
+            /* thread is not joinable ! */
+            result = EINVAL;
+            goto Exit;
+        }
     }
-
-    if (thread->join_count > 0) {
-        result = 0; // Already being joined; silently do nothing, like glibc.
-        goto Exit;
-    }
-
-    thread->attr.flags |= PTHREAD_ATTR_FLAG_DETACHED;
-
+    while ( __bionic_cmpxchg( flags, flags | PTHREAD_ATTR_FLAG_DETACHED,
+                              (volatile int*)&thread->attr.flags ) != 0 );
 Exit:
     pthread_mutex_unlock(&gThreadListLock);
     return result;

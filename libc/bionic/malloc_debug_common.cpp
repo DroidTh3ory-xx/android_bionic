@@ -40,14 +40,11 @@
  * or static (libc.a) linking.
  */
 
-#include "malloc_debug_common.h"
-
-#include <pthread.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <unistd.h>
-
 #include "dlmalloc.h"
-#include "ScopedPthreadMutexLocker.h"
+#include "malloc_debug_common.h"
 
 /*
  * In a VM process, this is set to 1 after fork()ing out of zygote.
@@ -379,7 +376,7 @@ static void malloc_init_impl() {
         }
     }
 
-    // Choose the appropriate .so for the requested debug level.
+    // Lets see which .so must be loaded for the requested debug level
     switch (debug_level) {
         case 1:
         case 5:

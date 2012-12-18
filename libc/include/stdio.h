@@ -41,21 +41,23 @@
 #include <sys/cdefs.h>
 #include <sys/_types.h>
 
+/* va_list and size_t must be defined by stdio.h according to Posix */
+#define __need___va_list
 #include <stdarg.h>
+
+/* note that this forces stddef.h to *only* define size_t */
+#define __need_size_t
+#include <stddef.h>
+
 #include <stddef.h>
 
 #if __BSD_VISIBLE || __POSIX_VISIBLE || __XPG_VISIBLE
 #include <sys/types.h>	/* XXX should be removed */
 #endif
 
-#ifndef _SIZE_T_DEFINED_
-#define _SIZE_T_DEFINED_
-typedef unsigned int  size_t;
-#endif
-
-#ifndef _SSIZE_T_DEFINED_
-#define _SSIZE_T_DEFINED_
-typedef long int  ssize_t;
+#ifndef	_SIZE_T_DEFINED_
+#define	_SIZE_T_DEFINED_
+typedef	unsigned long    size_t;
 #endif
 
 #ifndef	_OFF_T_DEFINED_
@@ -63,8 +65,13 @@ typedef long int  ssize_t;
 typedef	long    off_t;
 #endif
 
-#define __need_NULL
-#include <stddef.h>
+#ifndef NULL
+#ifdef 	__GNUG__
+#define	NULL	__null
+#else
+#define	NULL	0L
+#endif
+#endif
 
 #define	_FSTDIO			/* Define for new stdio with functions. */
 
@@ -242,9 +249,6 @@ off_t	 ftello(FILE *);
 size_t	 fwrite(const void *, size_t, size_t, FILE *);
 int	 getc(FILE *);
 int	 getchar(void);
-ssize_t	 getdelim(char ** __restrict, size_t * __restrict, int,
-	    FILE * __restrict);
-ssize_t	 getline(char ** __restrict, size_t * __restrict, FILE * __restrict);
 char	*gets(char *);
 #if __BSD_VISIBLE && !defined(__SYS_ERRLIST)
 #define __SYS_ERRLIST
@@ -478,8 +482,6 @@ __END_DECLS
 
 #if defined(__BIONIC_FORTIFY_INLINE)
 
-__BEGIN_DECLS
-
 __BIONIC_FORTIFY_INLINE
 __attribute__((__format__ (printf, 3, 0)))
 __attribute__((__nonnull__ (3)))
@@ -554,8 +556,6 @@ char *fgets(char *dest, int size, FILE *stream)
 
     return __fgets_chk(dest, size, stream, bos);
 }
-
-__END_DECLS
 
 #endif /* defined(__BIONIC_FORTIFY_INLINE) */
 
